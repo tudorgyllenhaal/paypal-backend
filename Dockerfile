@@ -1,10 +1,17 @@
 FROM golang:1.25 AS builder
 WORKDIR /app
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o server .
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /server ./cmd/server
 
 FROM alpine:3.22
-RUN apk add --no-cache wget
-COPY --from=builder /app/server /server
+RUN apk add --no-cache ca-certificates wget && adduser -D -u 10001 app
+WORKDIR /app
+COPY --from=builder /server /app/server
+COPY configs/aws.json /app/configs/aws.json
+USER app
 EXPOSE 8080
-CMD ["/server"]
+ENTRYPOINT ["/app/server"]
+CMD ["-config", "/app/configs/aws.json"]

@@ -1,17 +1,29 @@
+
+version: 0.2
+
+env:
+  shell: bash
+  variables:
+    IMAGE_REPO_NAME: paypal-server
+    IMAGE_TAG: v1
+
 phases:
   pre_build:
     commands:
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION |
-        docker login --username AWS --password-stdin
-        $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - echo "Authenticating with Amazon ECR..."
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - AWS_REGION=$AWS_DEFAULT_REGION
+      - ECR_REGISTRY="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+      - IMAGE_URI="$ECR_REGISTRY/$IMAGE_REPO_NAME:$IMAGE_TAG"
+      - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 
   build:
     commands:
-      - docker build --platform linux/amd64 -t paypal-server:v1 .
+      - echo "Building the Docker image..."
+      - docker build --platform linux/amd64 -t "$IMAGE_URI" -f Dockerfile .
 
   post_build:
     commands:
-      - docker tag paypal-server:v1
-        $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/paypal-server:v1
-      - docker push
-        $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/paypal-server:v1
+      - echo "Uploading Docker image to ECR..."
+      - docker push "$IMAGE_URI"
+      - echo "Published $IMAGE_URI"
