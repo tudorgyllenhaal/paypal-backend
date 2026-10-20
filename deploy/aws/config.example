@@ -1,0 +1,3 @@
+[profile paypal]
+region = us-east-1
+output = json

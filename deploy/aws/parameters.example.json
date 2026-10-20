@@ -1,0 +1,6 @@
+[
+  {"ParameterKey": "ImageUri", "ParameterValue": "123456789012.dkr.ecr.us-east-1.amazonaws.com/paypal-server:v1"},
+  {"ParameterKey": "VpcId", "ParameterValue": "vpc-REPLACE_ME"},
+  {"ParameterKey": "SubnetIds", "ParameterValue": "subnet-REPLACE_ME,subnet-REPLACE_ME"},
+  {"ParameterKey": "AllowedCidr", "ParameterValue": "0.0.0.0/0"}
+]

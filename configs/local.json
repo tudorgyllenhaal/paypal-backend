@@ -1,0 +1,9 @@
+{
+  "mode": "local",
+  "http": {
+    "address": "127.0.0.1:8080",
+    "read_timeout_seconds": 10,
+    "write_timeout_seconds": 10,
+    "shutdown_timeout_seconds": 20
+  }
+}
