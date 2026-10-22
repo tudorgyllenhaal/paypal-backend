@@ -1,4 +1,4 @@
-package paypalcheck
+package main
 
 import (
 	"encoding/json"

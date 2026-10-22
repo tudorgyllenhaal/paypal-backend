@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	"paypal/server/internal/paypalcheck"
 )
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
@@ -27,19 +25,19 @@ func run(ctx context.Context, args []string, out, errs io.Writer) int {
 		fmt.Fprintln(errs, "unexpected positional arguments")
 		return 1
 	}
-	c, err := paypalcheck.LoadConfig(*path)
+	c, err := LoadConfig(*path)
 	if err != nil {
 		fmt.Fprintln(errs, err)
 		return 1
 	}
 	/* Temporarily disabled: identity mappings and subsequent checks.
-	samples, err := paypalcheck.LoadSamples(*samplesPath)
+	samples, err := LoadSamples(*samplesPath)
 	if err != nil {
 		fmt.Fprintln(errs, err)
 		return 1
 	}
 	*/
-	report, err := paypalcheck.Run(ctx, c, nil)
+	report, err := Run(ctx, c, nil)
 	if err != nil {
 		fmt.Fprintln(errs, err)
 		return 1

@@ -1,4 +1,4 @@
-package paypalcheck
+package main
 
 import (
 	"context"
@@ -35,13 +35,23 @@ func configFile(t *testing.T, c Config) string {
 	b, _ := json.Marshal(c)
 	return fixture(t, string(b))
 }
-func mock(t *testing.T, handler http.HandlerFunc) *client {
+func mockHTTP(t *testing.T, handler http.HandlerFunc) *http.Client {
 	t.Helper()
-	s := httptest.NewServer(handler)
-	t.Cleanup(s.Close)
-	c := newClient(validConfig(), s.Client())
-	c.baseURL = s.URL
-	return c
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	target, _ := url.Parse(server.URL)
+	return &http.Client{Transport: checkerTransportFunc(func(r *http.Request) (*http.Response, error) {
+		clone := r.Clone(r.Context())
+		u := *r.URL
+		u.Scheme = target.Scheme
+		u.Host = target.Host
+		clone.URL = &u
+		return http.DefaultTransport.RoundTrip(clone)
+	})}
+}
+func mock(t *testing.T, handler http.HandlerFunc) *checker {
+	t.Helper()
+	return newChecker(validConfig(), mockHTTP(t, handler))
 }
 
 const tokenJSON = `{"access_token":"secret-token","token_type":"Bearer"}`
@@ -298,9 +308,9 @@ Temporarily disabled: identity mappings and subsequent checks.
 		}
 	}
 */
-type transportFunc func(*http.Request) (*http.Response, error)
+type checkerTransportFunc func(*http.Request) (*http.Response, error)
 
-func (f transportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+func (f checkerTransportFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func TestRunValidationAndNetworkFailure(t *testing.T) {
 	c := validConfig()
 	if _, err := Run(context.Background(), Config{}, nil); err == nil {
@@ -312,20 +322,21 @@ func TestRunValidationAndNetworkFailure(t *testing.T) {
 	}
 
 	*/
-	h := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { return nil, fmt.Errorf("secret-password") })}
+	h := &http.Client{Transport: checkerTransportFunc(func(*http.Request) (*http.Response, error) { return nil, fmt.Errorf("secret-password") })}
 	report, err := Run(context.Background(), c, h)
 	if err != nil || !report.HasFailures() || strings.Contains(report.Checks[0].Detail, "secret-password") {
 		t.Fatal(report, err)
 	}
 	live := c
 	live.Environment = "live"
-	if newClient(live, nil).baseURL != "https://api-m.paypal.com" {
-		t.Fatal("wrong live host")
-	}
-	bad := newClient(c, h)
-	bad.baseURL = ":bad"
-	if err := bad.authenticate(context.Background()); err == nil {
-		t.Fatal("invalid URL accepted")
+	h.Transport = checkerTransportFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Host != "api-m.paypal.com" {
+			t.Error("wrong live host")
+		}
+		return nil, fmt.Errorf("offline")
+	})
+	if _, err := Run(context.Background(), live, h); err != nil {
+		t.Fatal(err)
 	}
 }
 func TestRedirectNotFollowed(t *testing.T) {
@@ -431,7 +442,7 @@ func TestWildcardAndPersistentUnauthorized(t *testing.T) {
 	})
 	/* Temporarily disabled: identity mappings and subsequent checks.
 	t.Run("same environment accepted", func(t *testing.T) {
-		h := &http.Client{Transport: transportFunc(func(*http.Request) (*http.Response, error) { return nil, fmt.Errorf("offline") })}
+		h := &http.Client{Transport: checkerTransportFunc(func(*http.Request) (*http.Response, error) { return nil, fmt.Errorf("offline") })}
 		if _, err := Run(context.Background(), validConfig(), samples(t), h); err != nil {
 			t.Fatal(err)
 		}
@@ -492,7 +503,7 @@ func TestRollingRange(t *testing.T) {
 
 func TestRunUsesOneRollingRangeForAllPages(t *testing.T) {
 	var ranges []string
-	mockClient := mock(t, func(w http.ResponseWriter, r *http.Request) {
+	h := mockHTTP(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/reporting/transactions" {
 			q := r.URL.Query()
 			ranges = append(ranges, q.Get("start_date")+"/"+q.Get("end_date"))
@@ -501,16 +512,6 @@ func TestRunUsesOneRollingRangeForAllPages(t *testing.T) {
 		}
 		normal(t, w, r)
 	})
-	// Route the exported runner's fixed PayPal host to the local mock server.
-	target, _ := url.Parse(mockClient.baseURL)
-	h := &http.Client{Transport: transportFunc(func(r *http.Request) (*http.Response, error) {
-		clone := r.Clone(r.Context())
-		u := *r.URL
-		u.Scheme = target.Scheme
-		u.Host = target.Host
-		clone.URL = &u
-		return http.DefaultTransport.RoundTrip(clone)
-	})}
 	c := validConfig()
 	c.LookbackHours = 24
 	before := time.Now().UTC().Truncate(time.Second)

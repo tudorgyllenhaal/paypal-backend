@@ -1,8 +1,9 @@
-package paypalcheck
+package main
 
 import (
 	"context"
 	"net/http"
+	"paypal/server/internal/paypal"
 	"regexp"
 	"sort"
 	"time"
@@ -51,10 +52,10 @@ func Run(ctx context.Context, c Config, h *http.Client) (Report, error) {
 	}
 
 	*/
-	return newClient(c, h).check(ctx), nil
+	return newChecker(c, h).check(ctx), nil
 }
 
-func (c *client) check(ctx context.Context) Report {
+func (c *checker) check(ctx context.Context) Report {
 	r := Report{Environment: c.config.Environment, StartAt: c.config.StartAt, EndAt: c.config.EndAt,
 		ObservedCodes: []string{}, SubscriptionEvents: []string{}, Checks: []Check{
 			{"authorization", Unverified, "No OAuth evidence yet."},
@@ -68,12 +69,12 @@ func (c *client) check(ctx context.Context) Report {
 			*/
 
 		}}
-	if err := c.authenticate(ctx); err != nil {
+	if err := c.api.Authenticate(ctx); err != nil {
 		r.Checks[0] = Check{"authorization", Failed, err.Error()}
 		return r
 	}
 	r.Checks[0] = Check{"authorization", Confirmed, "OAuth credentials accepted for the selected application and environment."}
-	records, complete, historyErr := c.transactions(ctx)
+	records, complete, historyErr := c.api.Transactions(ctx, paypal.Query{StartAt: c.config.StartAt, EndAt: c.config.EndAt, MaxPages: c.config.MaxPages})
 	r.TransactionCount = len(records)
 	codes := map[string]bool{}
 	for _, tx := range records {
@@ -111,7 +112,7 @@ func (c *client) check(ctx context.Context) Report {
 		*/
 
 	}
-	hooks, err := c.webhooks(ctx)
+	hooks, err := c.api.Webhooks(ctx)
 	if err != nil {
 		r.Checks[3] = Check{"webhook_subscriptions", Failed, err.Error()}
 		return r
@@ -260,3 +261,13 @@ func matchSamples(records []transaction, s Samples) (matched, unresolved int) {
 }
 
 */
+
+// checker owns diagnostic policy and report assembly; paypal.Client owns API access.
+type checker struct {
+	config Config
+	api    *paypal.Client
+}
+
+func newChecker(c Config, h *http.Client) *checker {
+	return &checker{config: c, api: paypal.NewClient(paypal.Credentials{Environment: c.Environment, ClientID: c.ClientID, ClientSecret: c.ClientSecret}, h)}
+}

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"paypal/server/internal/paypal"
 	"strings"
 	"testing"
 )
@@ -128,7 +129,7 @@ func TestCreateAndCapture(t *testing.T) {
 			if code := run(context.Background(), arguments(t, action), &out, &errs); code != 0 {
 				t.Fatal(code, errs.String())
 			}
-			var result Result
+			var result paypal.PaymentResult
 			if json.Unmarshal(out.Bytes(), &result) != nil || result.OrderID != "ORDER123" {
 				t.Fatal(out.String())
 			}
@@ -206,18 +207,18 @@ func TestValidation(t *testing.T) {
 }
 func TestCredentials(t *testing.T) {
 	for _, raw := range []string{"{", `{} {}`, `{"environment":"sandbox"}`, `{"environment":"live","client_id":"id","client_secret":"secret"}`} {
-		if _, err := loadCredentials(input(t, raw)); err == nil {
+		if _, err := paypal.LoadSandboxCredentials(input(t, raw)); err == nil {
 			t.Fatal("invalid config accepted")
 		}
 	}
 	t.Setenv("PAYPAL_CLIENT_ID", "env-id")
 	t.Setenv("PAYPAL_CLIENT_SECRET", "env-secret")
-	c, err := loadCredentials(input(t, configJSON))
+	c, err := paypal.LoadSandboxCredentials(input(t, configJSON))
 	if err != nil || c.ClientID != "env-id" || c.ClientSecret != "env-secret" {
 		t.Fatal("environment override failed")
 	}
 	t.Setenv("PAYPAL_CLIENT_SECRET", "")
-	if _, err := loadCredentials(input(t, configJSON)); err == nil {
+	if _, err := paypal.LoadSandboxCredentials(input(t, configJSON)); err == nil {
 		t.Fatal("empty secret accepted")
 	}
 }

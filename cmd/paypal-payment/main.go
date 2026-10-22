@@ -6,9 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
+	"paypal/server/internal/paypal"
 	"regexp"
 	"strings"
+	"time"
 )
 
 func main() { os.Exit(run(context.Background(), os.Args[1:], os.Stdout, os.Stderr)) }
@@ -52,21 +55,21 @@ func run(ctx context.Context, args []string, out, errs io.Writer) int {
 		fmt.Fprintln(errs, "order-id must be alphanumeric")
 		return 1
 	}
-	c, err := loadCredentials(*path)
+	c, err := paypal.LoadSandboxCredentials(*path)
 	if err != nil {
 		fmt.Fprintln(errs, err)
 		return 1
 	}
-	api := newClient(c)
-	if err := api.authenticate(ctx); err != nil {
+	api := paypal.NewClient(c, &http.Client{Timeout: 30 * time.Second})
+	if err := api.Authenticate(ctx); err != nil {
 		fmt.Fprintln(errs, err)
 		return 1
 	}
-	var result Result
+	var result paypal.PaymentResult
 	if action == "create" {
-		result, err = api.create(ctx, amount, currency, returnURL, cancelURL, *requestID)
+		result, err = api.CreateOrder(ctx, amount, currency, returnURL, cancelURL, *requestID)
 	} else {
-		result, err = api.capture(ctx, orderID, *requestID)
+		result, err = api.CaptureOrder(ctx, orderID, *requestID)
 	}
 	if err != nil {
 		fmt.Fprintln(errs, err)

@@ -7,11 +7,11 @@ A Go HTTP server built with Hertz and a MySQL connection pool, supporting local 
 ```text
 server/
 ├── cmd/server/main.go     # HTTP server entry point
-├── cmd/paypal-check/      # Read-only PayPal integration dependency checker
+├── cmd/paypal-check/      # PayPal check configuration, report logic and unit tests
 ├── cmd/paypal-payment/    # Sandbox order creation and capture tool
 ├── internal/
 │   ├── config/config.go   # JSON configuration loading and validation
-│   ├── paypalcheck/       # PayPal diagnostic client, reports and unit tests
+│   ├── paypal/            # Shared OAuth, Transaction Search, webhook and sandbox order APIs
 │   ├── database/mysql.go  # MySQL pool, TLS, timeouts, and startup connection check
 │   ├── httpserver/server.go # Hertz server initialization
 │   ├── router/router.go   # API route registration
@@ -224,7 +224,7 @@ References: [MySQL Go driver](https://github.com/go-sql-driver/mysql), [MySQL Do
 
 ## Check PayPal integration dependencies
 
-Run this separate command before implementing imports. It does not start the HTTP server, connect to MySQL, register webhooks, or write payments. Its only POST request obtains an OAuth token; history and subscription checks use GET requests.
+Run this separate command before implementing imports. `cmd/paypal-check` owns configuration, check decisions, and report generation; `internal/paypal` owns authentication and API requests and is shared with `cmd/paypal-payment`. It does not start the HTTP server, connect to MySQL, register webhooks, or write payments. Its only POST request obtains an OAuth token; history and subscription checks use GET requests.
 
 ```sh
 cp configs/paypal.example.json configs/paypal.private.json
