@@ -1,6 +1,7 @@
 package router
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/cloudwego/hertz/pkg/app/server"
@@ -21,5 +22,18 @@ func TestRegisteredRoutes(t *testing.T) {
 	}
 	if r := ut.PerformRequest(h.Engine, "POST", "/ping", nil); r.Code == 200 {
 		t.Fatal("wrong method accepted")
+	}
+}
+
+func TestPayPalWebhookRoute(t *testing.T) {
+	h := server.New()
+	Register(h)
+	payload := `{"id":"TEST-WEBHOOK"}`
+	response := ut.PerformRequest(h.Engine, "POST", "/api/webhooks/paypal", &ut.Body{Body: strings.NewReader(payload), Len: len(payload)})
+	if response.Code != 200 || response.Body.Len() != 0 {
+		t.Fatalf("unexpected webhook acknowledgement: %d %q", response.Code, response.Body.String())
+	}
+	if r := ut.PerformRequest(h.Engine, "GET", "/api/webhooks/paypal", nil); r.Code == 200 {
+		t.Fatal("webhook accepted GET")
 	}
 }
