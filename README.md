@@ -6,9 +6,12 @@ A Go HTTP server built with Hertz and a MySQL connection pool, supporting local 
 
 ```text
 server/
-├── cmd/server/main.go     # Entry point; loads configuration and starts HTTP server
+├── cmd/server/main.go     # HTTP server entry point
+├── cmd/paypal-check/      # Read-only PayPal integration dependency checker
+├── cmd/paypal-payment/    # Sandbox order creation and capture tool
 ├── internal/
 │   ├── config/config.go   # JSON configuration loading and validation
+│   ├── paypalcheck/       # PayPal diagnostic client, reports and unit tests
 │   ├── database/mysql.go  # MySQL pool, TLS, timeouts, and startup connection check
 │   ├── httpserver/server.go # Hertz server initialization
 │   ├── router/router.go   # API route registration
@@ -17,6 +20,7 @@ server/
 ├── Dockerfile            # Linux amd64 server image for CodeBuild/ECS
 ├── buildspec.yml         # CodeBuild image build and ECR push
 ├── configs/
+│   ├── paypal.example.json # PayPal checker configuration template
 │   ├── local.json         # Local HTTP and MySQL settings
 │   └── aws.json           # AWS HTTP/MySQL defaults; ECS supplies database credentials
 ├── deploy/aws/
@@ -217,3 +221,149 @@ aws ecs update-service --cluster CLUSTER_NAME --service SERVICE_NAME --force-new
 ```
 
 References: [MySQL Go driver](https://github.com/go-sql-driver/mysql), [MySQL Docker image](https://hub.docker.com/_/mysql), [ECS secret injection](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/secrets-envvar-secrets-manager.html).
+
+## Check PayPal integration dependencies
+
+Run this separate command before implementing imports. It does not start the HTTP server, connect to MySQL, register webhooks, or write payments. Its only POST request obtains an OAuth token; history and subscription checks use GET requests.
+
+```sh
+cp configs/paypal.example.json configs/paypal.private.json
+```
+
+Edit `configs/paypal.private.json`:
+
+- Set `environment` to `sandbox` (or explicitly `live` for a live app).
+- Provide the application's `client_id` and `client_secret`. Alternatively, supply `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` through the environment; these override file values.
+- Use `lookback_hours` (default `24`, maximum `744`) for a rolling query ending at the current UTC time. The range is computed once per run and reused for every page. A positive `lookback_hours` takes precedence over dates. For a fixed historical query, omit it or set it to `0` and provide both `start_at` and `end_at` as RFC3339 timestamps, at most 31 days apart. If both dates are omitted, the checker defaults to the last 24 hours.
+- Set `max_pages` to limit requests (1–1000). Each page requests up to 500 entries, including balance-affecting and non-balance-affecting records. Reaching the page limit leaves coverage unverified.
+- Set `webhook_url` to the exact existing HTTPS listener URL and `expected_webhook_events` to the event names your accessible PayPal product requires, such as `PAYMENT.CAPTURE.COMPLETED`. The checker also recognizes an existing wildcard subscription. It does not select or change subscriptions for you.
+- Set `expected_transaction_event_codes` to the reporting event codes expected from your known sandbox scenarios. Empty expectations, empty results, missing codes, or partial retrieval remain unverified.
+
+```sh
+go run ./cmd/paypal-check -config configs/paypal.private.json
+```
+
+The command prints a JSON report with `confirmed`, `failed`, and `unverified` checks, transaction counts, and observed event codes. It excludes credentials, tokens, resource IDs, URLs, amounts, and raw payment payloads. Errors do not include PayPal response bodies. A failed check, invalid configuration, or output error produces a nonzero exit status. Exit status zero means the command ran without failed checks; it does **not** mean all dependencies are confirmed. Inspect every check's status.
+
+A `401` during a GET refreshes the token and retries once. Missing permissions, rate limits, and other failures produce actionable reports; this diagnostic command does not perform background retries. Requests have a 20-second timeout, and redirects are not followed.
+
+Identity mappings, consumer-history access, source-record identity checks, and the `-samples` option are temporarily commented out. The checker currently reports only authorization, history access, sandbox coverage, and webhook subscriptions.
+
+<!-- Temporarily disabled identity-mapping documentation.
+### Optional identity samples
+
+To compare captured API resources with retrieved reporting entries, save same-environment samples in `configs/paypal-samples.private.json`. The following shows the input structure; replace placeholders with actual matching sample identifiers. Additional fields from API resource payloads are accepted.
+
+```json
+{
+  "environment": "sandbox",
+  "captures": [{"id": "CAPTURE_ID"}],
+  "refunds": [{
+    "id": "REFUND_ID",
+    "links": [{
+      "rel": "up",
+      "href": "https://api-m.sandbox.paypal.com/v2/payments/captures/CAPTURE_ID"
+    }]
+  }],
+  "webhooks": [{
+    "event_type": "PAYMENT.CAPTURE.COMPLETED",
+    "resource_type": "capture",
+    "resource": {"id": "CAPTURE_ID"}
+  }]
+}
+```
+
+```sh
+go run ./cmd/paypal-check -config configs/paypal.private.json \
+  -samples configs/paypal-samples.private.json
+```
+
+A sample capture must have exactly one reporting entry with the same transaction ID. A refund must additionally have an explicit capture relationship matching reporting's `paypal_reference_id` with reference type `TXN`. The capture relationship may come from `supplementary_data.related_ids.capture_id` or a PayPal `up` link to a capture resource; conflicting relationships remain unresolved. Supported webhook samples identify a capture/refund resource and use the corresponding payment event type. Missing, unsupported, or ambiguous identities remain unverified; there is no matching by amount, date, or merchant.
+
+These checks establish relationships only for the supplied samples, whose authenticity and webhook signatures are not verified by this command. They do not prove a general stable source-record key. An application token and successful Transaction Search request also do not establish third-party consumer consent or partner authorization. The report deliberately keeps those dependencies unverified. Webhook subscription presence does not prove delivery, signature verification, or complete consumer purchase coverage.
+
+Both private JSON files are covered by the existing `configs/*.private.json` Git ignore rule. No real credentials or private samples belong in the example configuration or test fixtures.
+
+-->
+
+### Unit tests and overall coverage
+
+The PayPal tests use local mock HTTP servers and require no PayPal credentials or MySQL instance. From the server repository root:
+
+```sh
+mkdir -p bin
+go test ./... -coverprofile=bin/coverage.out
+go tool cover -func=bin/coverage.out
+go vet ./...
+```
+
+Use the `total: (statements)` line to assess overall coverage across all Go packages, including the server entry point. The implementation must keep this total above 80%; coverage output is ignored under `bin/`.
+
+PayPal references: [Transaction Search behavior and identifiers](https://developer.paypal.com/api/transaction-search/v1/search-get), [partner access requirement](https://github.com/paypal/paypal-rest-api-specifications/blob/main/openapi/reporting_transactions_v1.json), [existing webhook registrations](https://developer.paypal.com/api/webhooks/v1/webhooks-list/).
+
+## Create sandbox payments for history testing
+
+`cmd/paypal-payment` creates and captures PayPal sandbox checkout orders so you can query actual test transactions with `paypal-check`. It runs separately from the HTTP server and MySQL. The API host is fixed to `api-m.sandbox.paypal.com`; live configuration is rejected before any network request.
+
+Use the **sandbox seller application's** credentials in `configs/paypal.private.json`, the same file used by the history checker. The payment tool reads only `environment`, `client_id`, and `client_secret`; history dates and other checker settings are ignored. `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` override file credentials. A separate sandbox personal/buyer account approves the purchase in a browser. Do not use the seller account as the buyer.
+
+### 1. Create an order
+
+From the server repository root:
+
+```sh
+go run ./cmd/paypal-payment create \
+  -config configs/paypal.private.json \
+  -amount 1.25 -currency USD \
+  -request-id sandbox-create-001
+```
+
+The JSON result includes `order_id`, `status`, and `approval_url`. Creating the order alone does not complete a payment.
+
+Amounts are exact decimal strings, with at most nine integer digits and two decimal places; no floating-point conversion is used. Currency defaults to `USD`; PayPal determines supported currencies for the seller. `JPY`, `HUF`, and `TWD` require integer amounts.
+
+### 2. Approve as the sandbox buyer
+
+Open the returned `approval_url`, sign in with a separate sandbox buyer account, and approve the purchase. Use a separate browser profile if you are already signed in as the seller.
+
+The return and cancel URLs both default to `http://localhost:8080/ping`. Run the local HTTP server if you want that page to respond, or supply your own callback URLs when creating the order:
+
+```sh
+go run ./cmd/paypal-payment create \
+  -config configs/paypal.private.json \
+  -amount 1.25 -currency USD \
+  -return-url https://your-app.example/approved \
+  -cancel-url https://your-app.example/cancelled \
+  -request-id sandbox-create-002
+```
+
+Callbacks must use HTTPS, except local loopback HTTP URLs. They do not automatically capture the order. If the local return page is unavailable after approval, continue with capture using the saved order ID; if capture reports that approval is missing, complete approval first.
+
+### 3. Capture the approved order
+
+Replace `ORDER_ID` with the ID returned by create:
+
+```sh
+go run ./cmd/paypal-payment capture \
+  -config configs/paypal.private.json \
+  -order-id ORDER_ID \
+  -request-id sandbox-capture-001
+```
+
+The JSON result includes the order ID/status and each capture's ID/status. Check for a `COMPLETED` capture before treating it as a completed payment; pending captures do not represent completed payments. The output omits credentials, access tokens, and full buyer/payment payloads.
+
+Every create or capture operation requires a `-request-id` (1–38 letters, digits, dots, underscores, colons, or hyphens), sent as `PayPal-Request-Id`. Use a new key for every distinct operation, including separate keys for create and capture. For a timeout, output failure, or other uncertain outcome, retain the key and retry only the identical operation with the same arguments and key, within PayPal's idempotency retention period. The tool performs no automatic mutation retries and does not follow redirects. Nonzero exit status reports invalid input, API errors, or output failure; it does not guarantee that PayPal did not apply an operation before a network/output failure.
+
+### 4. Retrieve the payment history
+
+Use the history checker's `lookback_hours: 24` to automatically include recent payments, then run:
+
+```sh
+go run ./cmd/paypal-check -config configs/paypal.private.json
+```
+
+Use the same seller app/account to inspect the incoming payment. A successful sandbox checkout does not establish third-party consumer-history access. Reporting can take up to three hours to expose an executed transaction, and Transaction Search still requires the appropriate permissions.
+
+The payment command's unit tests use mock HTTP servers, covering create/capture requests, sandbox enforcement, exact amount validation, approval handling, idempotency headers, API/network failures, malformed responses, redirects, and credential redaction. They run with the existing full-suite coverage command above; no real PayPal payments are made by the tests.
+
+References: [PayPal create/approve/capture flow](https://developer.paypal.com/api/rest/integration/orders-api), [currency precision](https://developer.paypal.com/api/codes/currency), [Transaction Search reporting delay](https://developer.paypal.com/api/transaction-search/v1/search-get).
