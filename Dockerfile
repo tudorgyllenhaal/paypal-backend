@@ -8,6 +8,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /server ./cmd/se
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates wget && adduser -D -u 10001 app
+RUN wget -q -O /etc/ssl/certs/aws-rds-bundle.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
 WORKDIR /app
 COPY --from=builder /server /app/server
 COPY configs/aws.json /app/configs/aws.json

@@ -5,5 +5,20 @@
     "read_timeout_seconds": 10,
     "write_timeout_seconds": 10,
     "shutdown_timeout_seconds": 20
+  },
+  "mysql": {
+    "host": "127.0.0.1",
+    "port": 3306,
+    "database": "paypal",
+    "username": "paypal",
+    "password": "paypal_local",
+    "tls": false,
+    "tls_ca_file": "",
+    "connect_timeout_seconds": 5,
+    "io_timeout_seconds": 10,
+    "startup_timeout_seconds": 15,
+    "max_open_conns": 10,
+    "max_idle_conns": 5,
+    "conn_max_lifetime_seconds": 300
   }
 }

@@ -12,7 +12,41 @@ Parameters:
   AllowedCidr:
     Type: String
     Default: 0.0.0.0/0
+  DatabaseHost:
+    Type: String
+    Description: Existing MySQL endpoint reachable from the ECS subnets
+  DatabasePort:
+    Type: Number
+    Default: 3306
+    MinValue: 1
+    MaxValue: 65535
+  DatabaseName:
+    Type: String
+    Default: paypal
+  DatabaseUser:
+    Type: String
+  DatabasePassword:
+    Type: String
+    NoEcho: true
+    MinLength: 1
+    Description: Existing database user password; stored in Secrets Manager for ECS
+  DatabaseTLS:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+  DatabaseSecurityGroupId:
+    Type: String
+    Default: ''
+    Description: Optional existing database security group to allow access from ECS
+Conditions:
+  UseDatabaseTLS: !Equals [!Ref DatabaseTLS, 'true']
+  HasDatabaseSecurityGroup: !Not [!Equals [!Ref DatabaseSecurityGroupId, '']]
 Resources:
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Description: MySQL password for the server
+      SecretString: !Ref DatabasePassword
   Cluster:
     Type: AWS::ECS::Cluster
   Logs:
@@ -31,6 +65,14 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: ReadDatabasePassword
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Ref DatabaseSecret
   TaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -51,6 +93,15 @@ Resources:
           FromPort: 8080
           ToPort: 8080
           CidrIp: !Ref AllowedCidr
+  DatabaseIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasDatabaseSecurityGroup
+    Properties:
+      GroupId: !Ref DatabaseSecurityGroupId
+      IpProtocol: tcp
+      FromPort: !Ref DatabasePort
+      ToPort: !Ref DatabasePort
+      SourceSecurityGroupId: !Ref SecurityGroup
   Task:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -67,6 +118,22 @@ Resources:
         - Name: server
           Image: !Ref ImageUri
           Essential: true
+          Environment:
+            - Name: MYSQL_HOST
+              Value: !Ref DatabaseHost
+            - Name: MYSQL_PORT
+              Value: !Sub '${DatabasePort}'
+            - Name: MYSQL_DATABASE
+              Value: !Ref DatabaseName
+            - Name: MYSQL_USER
+              Value: !Ref DatabaseUser
+            - Name: MYSQL_TLS
+              Value: !Ref DatabaseTLS
+            - Name: MYSQL_TLS_CA_FILE
+              Value: !If [UseDatabaseTLS, '/etc/ssl/certs/aws-rds-bundle.pem', '']
+          Secrets:
+            - Name: MYSQL_PASSWORD
+              ValueFrom: !Ref DatabaseSecret
           PortMappings:
             - ContainerPort: 8080
           StopTimeout: 30
@@ -99,6 +166,8 @@ Resources:
           Subnets: !Ref SubnetIds
           SecurityGroups: [!Ref SecurityGroup]
 Outputs:
+  ServerSecurityGroupId:
+    Value: !Ref SecurityGroup
   ClusterName:
     Value: !Ref Cluster
   ServiceName:
