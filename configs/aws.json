@@ -10,7 +10,7 @@
     "host": "",
     "port": 3306,
     "database": "paypal",
-    "username": "",
+    "username": "dbadmin",
     "password": "",
     "tls": true,
     "tls_ca_file": "/etc/ssl/certs/aws-rds-bundle.pem",
